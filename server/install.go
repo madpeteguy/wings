@@ -17,6 +17,7 @@ import (
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/mount"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/client"
 	"github.com/pterodactyl/wings/config"
 	"github.com/pterodactyl/wings/environment"
@@ -449,7 +450,7 @@ func (ip *InstallationProcess) Execute() (string, error) {
 		},
 		Privileged:  true,
 		NetworkMode: container.NetworkMode(config.Get().Docker.Network.Mode),
-		UsernsMode: container.UsernsMode(config.Get().Docker.UsernsMode),
+		UsernsMode:  container.UsernsMode(config.Get().Docker.UsernsMode),
 	}
 
 	// Ensure the root directory for the server exists properly before attempting
@@ -470,7 +471,25 @@ func (ip *InstallationProcess) Execute() (string, error) {
 		}
 	}()
 
-	r, err := ip.client.ContainerCreate(ctx, conf, hostConf, nil, nil, ip.Server.ID()+"_installer")
+	var netConf *network.NetworkingConfig = nil //In case when no networking config is needed set nil
+	var serverNetConfig = config.Get().Docker.Network
+	if "macvlan" == serverNetConfig.Driver { //Generate networking config for macvlan driver
+		var defaultMapping = ip.Server.Config().Allocations.DefaultMapping
+		ip.Server.Log().Debug("Set macvlan " + serverNetConfig.Name + " IP to " + defaultMapping.Ip)
+		netConf = &network.NetworkingConfig{
+			EndpointsConfig: map[string]*network.EndpointSettings{
+				serverNetConfig.Name: { //Get network name from wings config
+					IPAMConfig: &network.EndpointIPAMConfig{
+						IPv4Address: defaultMapping.Ip,
+					},
+					IPAddress: defaultMapping.Ip, //Use default mapping ip address (wings support only one network per server)
+					Gateway:   serverNetConfig.Interfaces.V4.Gateway,
+				},
+			},
+		}
+	}
+	// Pass the networkings configuration or nil if none required
+	r, err := ip.client.ContainerCreate(ctx, conf, hostConf, netConf, nil, ip.Server.ID()+"_installer")
 	if err != nil {
 		return "", err
 	}
